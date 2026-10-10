@@ -1,53 +1,29 @@
-import dotenv from "dotenv";
-import { Worker } from "bullmq";
-import { Redis } from "ioredis";
 import { sendEmail } from "@akshar/email";
 import type { EMAILJOB } from "@akshar/email";
 
-dotenv.config();
-
-const redisUrl = process.env.QUEUE_REDIS_URL ?? "redis://localhost:6379";
-
-const connection = new Redis(redisUrl,{
-    maxRetriesPerRequest: null,
-});
-
-function createEmailWorker(queueName: string){
-
-    return new Worker<EMAILJOB>(
-        queueName,
-        async (job) =>{
-
-            console.log(`Processing ${job.name} from ${queueName}`)
-
-            await sendEmail(job.data);
-
-            console.log(`Email job ${job.id} completed`)
-        } ,
-        {
-            connection,
-            concurrency: queueName === "auth-email" ? 5 : 2,
-        },
-    );
+interface Env {
+  RESEND_API_KEY: string;
+  APP_URL: string;
+  EMAIL_FROM: string;
+  AKSHAR_AI_LOGO_URL: string;
 }
 
-const authWorker = createEmailWorker("auth-email");
-const notificationWorker = createEmailWorker("notification-email");
-
-for(const worker of [authWorker, notificationWorker]){
-
-    worker.on("failed", (job, error)=>{
-        console.error("Email job failed",{
-            queue: worker.name,
-            jobId: job?.id,
-            error: error.message,
+export default {
+  async queue(batch: MessageBatch<EMAILJOB>, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        await sendEmail(message.body, {
+          resendApiKey: env.RESEND_API_KEY,
+          appUrl: env.APP_URL,
+          from: env.EMAIL_FROM,
+          logoUrl: env.AKSHAR_AI_LOGO_URL,
         });
-    });
-
-    worker.on("error",(error)=>{
-        console.error("Email worker error:", error.message);
-    });
-}
-
-console.log("Akshar email workers started");
-
+        message.ack();
+      } catch {
+        // Never log message.body: verification/reset jobs contain OTPs.
+        // Cloudflare Queues retries; after max_retries it routes to the DLQ.
+        message.retry();
+      }
+    }
+  },
+};
