@@ -60,6 +60,13 @@ export class AuthStateDO {
     return this.storage.transaction(async txn => {
       const now = Date.now();
       const stored = await txn.get<StoredValue>(key);
+      const otpStored = await txn.get<StoredValue>("otp");
+      if (otpStored && otpStored.expiresAt > now) {
+        const otpState = otpStored.value as OtpState;
+        if (otpState.lockedUntil && otpState.lockedUntil > now) {
+          return { allowed: false, retryAfterSeconds: Math.ceil((otpState.lockedUntil - now) / 1000), attempt: 0 };
+        }
+      }
       const state: ResendState = stored && stored.expiresAt > now ? stored.value as ResendState : { sentAt: [], lastSentAt: null };
       state.sentAt = state.sentAt.filter(t => now - t < 60 * 60 * 1000);
       const attempt = state.sentAt.length + 1;
