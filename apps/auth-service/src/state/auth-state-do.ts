@@ -1,27 +1,18 @@
 type StoredValue = { value: unknown; expiresAt: number };
 type ResendState = { sentAt: number[]; lastSentAt: number | null };
 type OtpState = { otpHash: string; attempts: number; lockedUntil: number | null };
-type PendingSignup = { firstName: string; lastName?: string; email: string; passwordHash: string; signupIp: string };
 
 export class AuthStateDO {
   private storage: DurableObjectStorage;
-
-  constructor(state: DurableObjectState) {
-    this.storage = state.storage;
-  }
+  constructor(state: DurableObjectState) { this.storage = state.storage; }
 
   async fetch(request: Request): Promise<Response> {
     if (request.method !== "POST") return Response.json({ error: "METHOD_NOT_ALLOWED" }, { status: 405 });
     let body: Record<string, unknown>;
     try { body = await request.json() as Record<string, unknown>; }
     catch { return Response.json({ error: "INVALID_JSON" }, { status: 400 }); }
-
-    try {
-      const result = await this.dispatch(body);
-      return Response.json({ result });
-    } catch {
-      return Response.json({ error: "STATE_OPERATION_FAILED" }, { status: 500 });
-    }
+    try { return Response.json({ result: await this.dispatch(body) }); }
+    catch { return Response.json({ error: "STATE_OPERATION_FAILED" }, { status: 500 }); }
   }
 
   private async dispatch(body: Record<string, unknown>): Promise<unknown> {
@@ -57,10 +48,7 @@ export class AuthStateDO {
       }
       const otp = stored.value as OtpState;
       if (otp.lockedUntil && otp.lockedUntil > Date.now()) return { status: "LOCKED" as const };
-      if (otp.otpHash === expectedHash) {
-        await txn.delete(key);
-        return { status: "VERIFIED" as const };
-      }
+      if (otp.otpHash === expectedHash) return { status: "VERIFIED" as const };
       otp.attempts += 1;
       if (otp.attempts >= 5) otp.lockedUntil = Date.now() + 30 * 60 * 1000;
       await txn.put(key, { value: otp, expiresAt: stored.expiresAt });
@@ -72,23 +60,20 @@ export class AuthStateDO {
     return this.storage.transaction(async txn => {
       const now = Date.now();
       const stored = await txn.get<StoredValue>(key);
-      const state: ResendState = stored && stored.expiresAt > now
-        ? stored.value as ResendState
-        : { sentAt: [], lastSentAt: null };
+      const state: ResendState = stored && stored.expiresAt > now ? stored.value as ResendState : { sentAt: [], lastSentAt: null };
       state.sentAt = state.sentAt.filter(t => now - t < 60 * 60 * 1000);
-      const last = state.lastSentAt;
       const attempt = state.sentAt.length + 1;
       const cooldown = Math.min(60 * Math.pow(2, Math.max(0, attempt - 1)), 600);
-      if (last !== null && now - last < cooldown * 1000) {
-        return { allowed: false, retryAfterSeconds: Math.ceil((cooldown * 1000 - (now - last)) / 1000), attempt };
+      if (state.lastSentAt !== null && now - state.lastSentAt < cooldown * 1000) {
+        return { allowed: false, retryAfterSeconds: Math.ceil((cooldown * 1000 - (now - state.lastSentAt)) / 1000), attempt };
       }
       if (state.sentAt.length >= 6) {
         const oldest = state.sentAt[0] ?? now;
-        return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((oldest + 60 * 60 * 1000 - now) / 1000)), attempt };
+        return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((oldest + 3600000 - now) / 1000)), attempt };
       }
       state.sentAt.push(now);
       state.lastSentAt = now;
-      await txn.put(key, { value: state, expiresAt: now + 60 * 60 * 1000 });
+      await txn.put(key, { value: state, expiresAt: now + 3600000 });
       return { allowed: true, retryAfterSeconds: 0, attempt };
     });
   }
