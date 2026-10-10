@@ -1,0 +1,22 @@
+name = "akshar-auth-service"
+main = "src/app.ts"
+compatibility_date = "2026-10-10"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+APP_ENV = "production"
+
+[[queues.producers]]
+binding = "AUTH_EMAIL_QUEUE"
+queue = "akshar-auth-email"
+
+[[queues.consumers]]
+queue = "akshar-auth-email"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "akshar-auth-email-dlq"
+
+[[kv_namespaces]]
+binding = "AUTH_STATE"
+id = "REPLACE_WITH_AUTH_STATE_KV_ID"
