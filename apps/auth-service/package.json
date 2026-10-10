@@ -12,7 +12,6 @@
   "dependencies": {
     "@akshar/db": "workspace:*",
     "@akshar/email": "workspace:*",
-    "@akshar/redis": "workspace:*",
     "@akshar/validation": "workspace:*",
     "hono": "^4.13.13"
   },
