@@ -1,102 +1,79 @@
 import type { SignupInput } from "@akshar/validation";
+import type { Database } from "@akshar/db";
+import type { EmailQueue } from "../queues/email.queue.js";
+import { enqueueAuthEmail } from "../queues/email.queue.js";
 import { userRepository } from "../repositories/user-repository.js";
 import { signupRateLimit } from "../redis/signup-rate-limit.js";
 import { hashPassword, verifyPassword } from "../security/password.js";
 import { generateOtp, hashOtp } from "../security/otp.js";
 import { emailOtp } from "../redis/email-otp.js";
 import { pendingSignup } from "../redis/pending-signup.js";
-import { authEmailQueue } from "../queues/email.queue.js";
+
+export class SignupError extends Error {
+  constructor(public readonly code: "EMAIL_EXISTS" | "INVALID_PENDING_CREDENTIALS" | "RATE_LIMITED" | "QUEUE_UNAVAILABLE" | "STATE_UNAVAILABLE", message: string) {
+    super(message);
+    this.name = "SignupError";
+  }
+}
 
 export async function signup(
-    input: SignupInput,
-    ip: string,
+  input: SignupInput,
+  ip: string,
+  deps: { db: Database; queue: EmailQueue },
 ) {
-   
-    const email = input.email.trim().toLowerCase();
+  const email = input.email.trim().toLowerCase();
 
-    const existingUser = await userRepository.findByEmail(email);
+  let existingUser;
+  try {
+    existingUser = await userRepository.findByEmail(deps.db, email);
+  } catch {
+    throw new SignupError("STATE_UNAVAILABLE", "Signup is temporarily unavailable. Please try again shortly.");
+  }
+  if (existingUser) throw new SignupError("EMAIL_EXISTS", "An account with this email already exists.");
 
-    if(existingUser){
-        throw new Error("Email is already registered");
-    }
+  let existingPendingSignup;
+  try {
+    existingPendingSignup = await pendingSignup.get(email);
+  } catch {
+    throw new SignupError("STATE_UNAVAILABLE", "Signup is temporarily unavailable. Please try again shortly.");
+  }
+  if (existingPendingSignup) {
+    const matches = await verifyPassword(input.password, existingPendingSignup.passwordHash);
+    if (!matches) throw new SignupError("INVALID_PENDING_CREDENTIALS", "Signup is already in progress for this email. Check the details and try again.");
+    return { status: "SIGNUP_RECOVERED" as const, message: "Signup is already in progress. Request a new code if needed." };
+  }
 
-    const existingPendingSignup = await pendingSignup.get(email);
+  let rateLimit;
+  try {
+    rateLimit = await signupRateLimit.check(ip, email);
+  } catch {
+    throw new SignupError("STATE_UNAVAILABLE", "Signup is temporarily unavailable. Please try again shortly.");
+  }
+  if (rateLimit.status === "LIMITED") throw new SignupError("RATE_LIMITED", "Too many signup attempts. Please try again later.");
 
-    if(existingPendingSignup){
-        const passwordMatches = await verifyPassword(
-            input.password,
-            existingPendingSignup.passwordHash,
-        );
+  const passwordHash = await hashPassword(input.password);
+  try {
+    await pendingSignup.create({ firstName: input.fname, lastName: input.lname, email, passwordHash, signupIp: ip });
+  } catch {
+    try { await signupRateLimit.release(ip, email); } catch { /* preserve original failure */ }
+    throw new SignupError("STATE_UNAVAILABLE", "Signup is temporarily unavailable. Please try again shortly.");
+  }
 
-        if(!passwordMatches){
-            throw new Error("Invalid signup credentials");
-        }
+  const otp = generateOtp();
+  try {
+    await emailOtp.create(email, await hashOtp(otp));
+  } catch {
+    try { await pendingSignup.delete(email); } catch { /* best-effort cleanup */ }
+    try { await signupRateLimit.release(ip, email); } catch { /* best-effort cleanup */ }
+    throw new SignupError("STATE_UNAVAILABLE", "Signup is temporarily unavailable. Please try again shortly.");
+  }
 
-        return {
-            status: "SIGNUP_RECOVERED" as const,
-        }
-    }
+  try {
+    await enqueueAuthEmail(deps.queue, { type: "VERIFY_EMAIL", email, otp });
+  } catch {
+    // Keep the pending signup and OTP so a retry can recover; never expose queue details.
+    throw new SignupError("QUEUE_UNAVAILABLE", "We couldn't queue your verification email right now. Please try again shortly.");
+  }
 
-
-    const rateLimit = await signupRateLimit.check(
-        ip,
-        email,
-    );
-
-    if (rateLimit.status === "LIMITED"){
-        throw new Error(
-            "Too many signup attempts. Please try again later."
-        );
-    }
-
-    const passwordHash = await hashPassword(input.password);
-
-    try {
-        await pendingSignup.create({
-            firstName: input.fname,
-            lastName: input.lname,
-            email,
-            passwordHash,
-            signupIp: ip,
-        });
-    } catch (error) {
-        await signupRateLimit.release(ip, email);
-        throw error;
-    }
-
-    const otp = generateOtp();
-
-    const otpHash = await hashOtp(otp);
-
-    try {
-        
-          await emailOtp.create(email, otpHash);
-
-    } catch (error) {
-        await pendingSignup.delete(email);
-        await signupRateLimit.release(ip, email);
-        throw error;
-    }
-
-
-    try {
-        await authEmailQueue.add("VERIFY_EMAIL", {
-            type: "VERIFY_EMAIL",
-            email,
-            otp,
-        });
-    } catch (error) {
-        // Do not log the OTP or expose Redis/BullMQ details.
-        // Keep the pending signup so the user can retry email delivery.
-        throw new Error(
-            "We couldn't send your verification code right now. Please try again shortly."
-        );
-    }
-
-    return {
-        status: "VERIFICATION_EMAIL_QUEUED" as const,
-    };
-
-
-
+  return { status: "VERIFICATION_EMAIL_QUEUED" as const, message: "If the address can receive email, a verification code should arrive shortly. Check your spam folder too." };
 }
