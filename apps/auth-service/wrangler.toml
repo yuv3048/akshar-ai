@@ -6,3 +6,11 @@ compatibility_flags = ["nodejs_compat"]
 [[queues.producers]]
 binding = "AUTH_EMAIL_QUEUE"
 queue = "akshar-auth-email"
+
+[[durable_objects.bindings]]
+name = "AUTH_STATE"
+class_name = "AuthStateDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AuthStateDO"]
