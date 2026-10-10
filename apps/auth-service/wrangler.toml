@@ -6,7 +6,3 @@ compatibility_flags = ["nodejs_compat"]
 [[queues.producers]]
 binding = "AUTH_EMAIL_QUEUE"
 queue = "akshar-auth-email"
-
-[[kv_namespaces]]
-binding = "AUTH_STATE"
-id = "REPLACE_WITH_AUTH_STATE_KV_ID"
