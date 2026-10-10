@@ -7,3 +7,5 @@ export function createDb(connectionString: string) {
   const sql = neon(connectionString);
   return drizzle({ client: sql, schema });
 }
+
+export type Database = ReturnType<typeof createDb>;
