@@ -1,1 +1,1 @@
-export { redis } from "./client.js";
+export { redis, configureRedis } from "./client.js";
