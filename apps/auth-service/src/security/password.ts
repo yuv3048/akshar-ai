@@ -1,122 +1,53 @@
-import { webcrypto } from "node:crypto";
-
-const { subtle } = webcrypto;
-
 const ITERATIONS = 600_000;
 const KEY_LENGTH = 256;
 const SALT_LENGTH = 16;
+const encoder = new TextEncoder();
 
-export async function hashPassword(
-    password: string, 
-): Promise<string> {
-
-    const salt = webcrypto.getRandomValues(
-        new Uint8Array(SALT_LENGTH),
-    );
-
-    const passwordKey = await subtle.importKey(
-        "raw",
-        new TextEncoder().encode(password),
-        "PBKDF2",
-        false,
-        ["deriveBits"],
-    );
-
-    const derivedBits = await subtle.deriveBits(
-        {
-            name: "PBKDF2",
-            salt,
-            iterations: ITERATIONS,
-            hash: "SHA-256",
-        },
-        passwordKey,
-        KEY_LENGTH,
-    );
-
-    const hash = new Uint8Array(derivedBits);
-
-    return [
-        "pbkdf2",
-        "sha256",
-        ITERATIONS,
-        Buffer.from(salt).toString("base64"),
-        Buffer.from(hash).toString("base64"),
-    ].join("$");
-
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
-export async function verifyPassword(
-    password: string,
-    storedHash: string,
-): Promise<boolean>{
-    const parts = storedHash.split("$");
+function fromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
 
-    if(parts.length !== 5){
-        return false;
-    }
+async function derive(password: string, salt: Uint8Array, iterations: number, length: number): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations, hash: "SHA-256" }, key, length);
+  return new Uint8Array(bits);
+}
 
-    const [
-        algorithm,
-        hashAlgorithm,
-        iterationsString,
-        saltBase64,
-        hashBase64,
-    ] = parts;
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+  const hash = await derive(password, salt, ITERATIONS, KEY_LENGTH);
+  return ["pbkdf2", "sha256", ITERATIONS, toBase64(salt), toBase64(hash)].join("$");
+}
 
-    if(
-        algorithm !== "pbkdf2" ||
-        hashAlgorithm !== "sha256"
-    ) {
-        return false;
-    }
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const parts = storedHash.split("$");
+  if (parts.length !== 5) return false;
+  const [algorithm, hashAlgorithm, iterationsString, saltBase64, hashBase64] = parts;
+  if (algorithm !== "pbkdf2" || hashAlgorithm !== "sha256" || !saltBase64 || !hashBase64) return false;
 
-    const iterations = Number(iterationsString);
+  const iterations = Number(iterationsString);
+  if (!Number.isSafeInteger(iterations) || iterations < 100_000 || iterations > 2_000_000) return false;
 
-    if(
-        !Number.isInteger(iterations) || 
-        iterations <= 0
-    ) {
-        return false;
-    }
+  let salt: Uint8Array;
+  let expected: Uint8Array;
+  try {
+    salt = fromBase64(saltBase64);
+    expected = fromBase64(hashBase64);
+  } catch {
+    return false;
+  }
+  if (salt.length !== SALT_LENGTH || expected.length === 0) return false;
 
-    const salt = Uint8Array.from(
-        Buffer.from(saltBase64, "base64"),
-    );
-
-    const expectedHash = Uint8Array.from(
-        Buffer.from(hashBase64, "base64"),
-    )
-
-    const passwordKey = await subtle.importKey(
-        "raw",
-        new TextEncoder().encode(password),
-        "PBKDF2",
-        false,
-        ["deriveBits"],
-    );
-
-    const deriveBits = await subtle.deriveBits(
-        {
-            name: "PBKDF2",
-            salt,
-            iterations,
-            hash: "SHA-256",
-        },
-        passwordKey,
-        expectedHash.length * 8,
-    );
-
-    const derivedHash = new Uint8Array(deriveBits);
-
-    if (derivedHash.length !== expectedHash.length){
-        return false;
-    }
-
-    let difference = 0;
-
-    for (let i=0; i < derivedHash.length; i++){
-        difference |= derivedHash[i] ^ expectedHash[i];
-    }
-
-    return difference === 0; 
+  const actual = await derive(password, salt, iterations, expected.length * 8);
+  if (actual.length !== expected.length) return false;
+  let difference = 0;
+  for (let i = 0; i < actual.length; i++) difference |= (actual[i] ?? 0) ^ (expected[i] ?? 0);
+  return difference === 0;
 }
