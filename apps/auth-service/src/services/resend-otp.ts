@@ -30,10 +30,13 @@ export async function resendVerificationOtp(input: ResendOtpInput, deps: { db: D
   }
 
   const otp = generateOtp();
-  try {
-    await deps.state.set(scope, "otp", { otpHash: await hashOtp(otp), attempts: 0, lockedUntil: null }, 420);
-    await enqueueAuthEmail(deps.queue, { type: "VERIFY_EMAIL", email, otp });
-  } catch {
+  try { await deps.state.set(scope, "otp", { otpHash: await hashOtp(otp), attempts: 0, lockedUntil: null }, 420); }
+  catch {
+    try { await deps.state.releaseResend(scope); } catch { /* best-effort compensation */ }
+    throw new AppError("STATE_UNAVAILABLE", "Resend is temporarily unavailable.", 503);
+  }
+  try { await enqueueAuthEmail(deps.queue, { type: "VERIFY_EMAIL", email, otp }); }
+  catch {
     try { await deps.state.delete(scope, "otp"); } catch { /* best-effort cleanup */ }
     try { await deps.state.releaseResend(scope); } catch { /* best-effort compensation */ }
     throw new AppError("QUEUE_UNAVAILABLE", "We couldn't queue the verification email. Please try again shortly.", 503);
