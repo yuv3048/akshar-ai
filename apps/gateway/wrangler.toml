@@ -1,0 +1,7 @@
+name = "akshar-gateway"
+main = "src/app.ts"
+compatibility_date = "2026-10-10"
+
+[[services]]
+binding = "AUTH_SERVICE"
+service = "akshar-auth-service"
