@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { createDb } from "@akshar/db";
 import { loginSchema, resendOtpSchema, signupSchema, verifyEmailSchema } from "@akshar/validation";
 import type { EMAILJOB } from "@akshar/email";
@@ -20,7 +20,7 @@ export type AuthBindings = {
 type AuthEnv = { Bindings: AuthBindings };
 const controller = new Hono<AuthEnv>();
 
-async function readJson(c: Parameters<Parameters<typeof controller.post>[1]>[0]): Promise<unknown> {
+async function readJson(c: Context<AuthEnv>): Promise<unknown> {
   try { return await c.req.json(); }
   catch { throw new AppError("INVALID_JSON", "Request body must be valid JSON.", 400); }
 }
@@ -31,7 +31,7 @@ function validationError(error: { issues: { path: PropertyKey[]; message: string
   });
 }
 
-function deps(c: { env: AuthBindings }) {
+function deps(c: Context<AuthEnv>) {
   return { db: createDb(c.env.DATABASE_URL), queue: c.env.AUTH_EMAIL_QUEUE, state: new AuthState(c.env.AUTH_STATE) };
 }
 
