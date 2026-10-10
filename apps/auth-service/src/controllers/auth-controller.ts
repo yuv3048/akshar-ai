@@ -36,7 +36,8 @@ function deps(c: Context<AuthEnv>) {
 function sessionCookie(c: Context<AuthEnv>): string | null {
   const cookie = c.req.header("cookie") ?? "";
   const entry = cookie.split(";").map(value => value.trim()).find(value => value.startsWith("akshar_session="));
-  return entry ? decodeURIComponent(entry.slice("akshar_session=".length)) : null;
+  if (!entry) return null;
+  try { return decodeURIComponent(entry.slice("akshar_session=".length)); } catch { return null; }
 }
 
 controller.post("/signup", async c => {
@@ -81,7 +82,9 @@ controller.get("/me", async c => {
   const token = sessionCookie(c);
   const claims = token ? await verifySessionToken(token, c.env.AUTH_TOKEN_SECRET) : null;
   if (!claims) throw new AppError("INVALID_CREDENTIALS", "Please sign in to continue.", 401);
-  const user = await userRepository.findByEmail(createDb(c.env.DATABASE_URL), claims.email).catch(() => null);
+  let user;
+  try { user = await userRepository.findByEmail(createDb(c.env.DATABASE_URL), claims.email); }
+  catch { throw new AppError("AUTH_UNAVAILABLE", "We couldn't validate your session right now.", 503); }
   if (!user || user.id !== claims.sub || !user.emailVerifiedAt) throw new AppError("INVALID_CREDENTIALS", "Please sign in to continue.", 401);
   c.header("Cache-Control", "no-store");
   return c.json({ data: { user: { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, emailVerifiedAt: user.emailVerifiedAt } } }, 200);
