@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from "../security/password.js";
 import { generateOtp, hashOtp } from "../security/otp.js";
 import { emailOtp } from "../redis/email-otp.js";
 import { pendingSignup } from "../redis/pending-signup.js";
+import { authEmailQueue } from "../queues/email.queue.js";
 
 export async function signup(
     input: SignupInput,
@@ -78,9 +79,24 @@ export async function signup(
     }
 
 
+    try {
+        await authEmailQueue.add("VERIFY_EMAIL", {
+            type: "VERIFY_EMAIL",
+            email,
+            otp,
+        });
+    } catch (error) {
+        // Do not log the OTP or expose Redis/BullMQ details.
+        // Keep the pending signup so the user can retry email delivery.
+        throw new Error(
+            "We couldn't send your verification code right now. Please try again shortly."
+        );
+    }
+
+    return {
+        status: "VERIFICATION_EMAIL_QUEUED" as const,
+    };
 
 
-    console.log("Password hash:", passwordHash);
-    console.log("Signup IP:", ip);
 
 }
