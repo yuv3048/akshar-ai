@@ -61,7 +61,14 @@ controller.post("/resend-otp", async c => {
 controller.post("/login", async c => {
   const parsed = loginSchema.safeParse(await readJson(c));
   if (!parsed.success) throw validationError(parsed.error);
-  const result = await login(parsed.data, { db: createDb(c.env.DATABASE_URL), tokenSecret: c.env.AUTH_TOKEN_SECRET });
+  const ip = c.req.header("x-client-ip") ?? "unknown";
+  const result = await login(parsed.data, {
+    db: createDb(c.env.DATABASE_URL),
+    tokenSecret: c.env.AUTH_TOKEN_SECRET,
+    state: new AuthState(c.env.AUTH_STATE),
+    queue: c.env.AUTH_EMAIL_QUEUE,
+    ip,
+  });
   c.header("Set-Cookie", `akshar_session=${result.token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=900`);
   c.header("Cache-Control", "no-store");
   return c.json({ data: { user: result.user }, requestId: c.req.header("x-request-id") ?? crypto.randomUUID() }, 200);
