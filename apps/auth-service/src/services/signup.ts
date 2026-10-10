@@ -8,6 +8,8 @@ import { generateOtp, hashOtp } from "../security/otp.js";
 import { AuthState } from "../state/auth-state.js";
 import { AppError } from "../errors/app-error.js";
 
+type PendingSignup = { firstName: string; lastName?: string; email: string; passwordHash: string; signupIp: string };
+
 export async function signup(input: SignupInput, ip: string, deps: { db: Database; queue: EmailQueue; state: AuthState }) {
   const email = input.email.trim().toLowerCase();
   let existingUser;
@@ -16,13 +18,12 @@ export async function signup(input: SignupInput, ip: string, deps: { db: Databas
   if (existingUser) throw new AppError("EMAIL_EXISTS", "An account with this email already exists.", 409);
 
   const scope = `email:${email}`;
-  let pending: { firstName: string; lastName?: string; email: string; passwordHash: string; signupIp: string } | null;
-  try { pending = await deps.state.get(scope, "pending-signup"); }
+  let existingPendingSignup: PendingSignup | null;
+  try { existingPendingSignup = await deps.state.get<PendingSignup>(scope, "pending-signup"); }
   catch { throw new AppError("STATE_UNAVAILABLE", "Signup is temporarily unavailable.", 503); }
-  if (pending) {
-    if (!await verifyPassword(input.password, pending.passwordHash)) {
-      throw new AppError("INVALID_PENDING_CREDENTIALS", "Signup is already in progress for this email. Check the details and try again.", 400);
-    }
+  if (existingPendingSignup) {
+    const matches = await verifyPassword(input.password, existingPendingSignup.passwordHash);
+    if (!matches) throw new AppError("INVALID_PENDING_CREDENTIALS", "Signup is already in progress for this email. Check the details and try again.", 400);
     return { status: "SIGNUP_RECOVERED" as const, message: "Signup is already in progress. If the code did not arrive, request another one." };
   }
 
@@ -36,13 +37,16 @@ export async function signup(input: SignupInput, ip: string, deps: { db: Databas
 
   const passwordHash = await hashPassword(input.password);
   const pendingSignup = { firstName: input.fname, lastName: input.lname, email, passwordHash, signupIp: ip };
-  try {
-    await deps.state.set(scope, "pending-signup", pendingSignup, 3600);
-    const otp = generateOtp();
-    await deps.state.set(scope, "otp", { otpHash: await hashOtp(otp), attempts: 0, lockedUntil: null }, 420);
-    await enqueueAuthEmail(deps.queue, { type: "VERIFY_EMAIL", email, otp });
-  } catch {
-    // Keep pending data if the queue is temporarily unavailable so the user can safely resend.
+  try { await deps.state.set(scope, "pending-signup", pendingSignup, 3600); }
+  catch { throw new AppError("STATE_UNAVAILABLE", "Signup is temporarily unavailable.", 503); }
+
+  const otp = generateOtp();
+  try { await deps.state.set(scope, "otp", { otpHash: await hashOtp(otp), attempts: 0, lockedUntil: null }, 420); }
+  catch { throw new AppError("STATE_UNAVAILABLE", "Signup is temporarily unavailable.", 503); }
+
+  try { await enqueueAuthEmail(deps.queue, { type: "VERIFY_EMAIL", email, otp }); }
+  catch {
+    // Keep the pending signup and OTP so the user can recover via the resend endpoint.
     throw new AppError("QUEUE_UNAVAILABLE", "We couldn't queue your verification email. Please try again shortly.", 503);
   }
 
