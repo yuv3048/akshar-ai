@@ -16,7 +16,9 @@ export async function verifyEmail(input: VerifyEmailInput, deps: { db: Database;
   try { pending = await deps.state.get<PendingSignup>(scope, "pending-signup"); }
   catch { throw new AppError("STATE_UNAVAILABLE", "Verification is temporarily unavailable.", 503); }
   if (!pending) {
-    const existing = await userRepository.findByEmail(deps.db, email).catch(() => null);
+    let existing;
+    try { existing = await userRepository.findByEmail(deps.db, email); }
+    catch { throw new AppError("AUTH_UNAVAILABLE", "Verification is temporarily unavailable.", 503); }
     if (existing?.emailVerifiedAt) return { status: "EMAIL_ALREADY_VERIFIED" as const, user: { id: existing.id, email: existing.email } };
     throw new AppError("PENDING_SIGNUP_EXPIRED", "This signup has expired. Please sign up again.", 400);
   }
