@@ -17,7 +17,7 @@ export async function verifyEmail(input: VerifyEmailInput, deps: { db: Database;
   catch { throw new AppError("STATE_UNAVAILABLE", "Verification is temporarily unavailable.", 503); }
   if (!pending) {
     const existing = await userRepository.findByEmail(deps.db, email).catch(() => null);
-    if (existing?.emailVerifiedAt) return { status: "EMAIL_ALREADY_VERIFIED" as const, user: { id: existing.id, email: existing.email }, welcomeEmailQueued: true };
+    if (existing?.emailVerifiedAt) return { status: "EMAIL_ALREADY_VERIFIED" as const, user: { id: existing.id, email: existing.email } };
     throw new AppError("PENDING_SIGNUP_EXPIRED", "This signup has expired. Please sign up again.", 400);
   }
 
@@ -40,11 +40,13 @@ export async function verifyEmail(input: VerifyEmailInput, deps: { db: Database;
     throw new AppError("AUTH_UNAVAILABLE", "We verified the code but couldn't finish creating your account. Please retry shortly.", 503);
   }
   if (!user) throw new AppError("AUTH_UNAVAILABLE", "We couldn't finish creating your account. Please retry shortly.", 503);
+  if (!user.emailVerifiedAt) throw new AppError("EMAIL_EXISTS", "An account with this email already exists. Please sign in or use account recovery.", 409);
 
   const welcomeJob = { type: "WELCOME_EMAIL" as const, email: user.email, fname: user.firstName };
   try { await deps.state.set(scope, "welcome-email-pending", welcomeJob, 7 * 24 * 3600); } catch { /* queue attempt still proceeds */ }
-  await deps.state.delete(scope, "otp");
-  await deps.state.delete(scope, "pending-signup");
+  // User creation is durable now; state cleanup must not turn a successful verification into a false failure.
+  await deps.state.delete(scope, "otp").catch(() => false);
+  await deps.state.delete(scope, "pending-signup").catch(() => false);
 
   let welcomeEmailQueued = false;
   try {
