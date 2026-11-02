@@ -1,48 +1,35 @@
-import{
-    pgTable,
-    uuid,
-    varchar,
-    timestamp,
-    unique,
+import {
+  pgTable,
+  uuid,
+  varchar,
+  timestamp,
+  unique,
 } from "drizzle-orm/pg-core";
 
 import { users } from "./user.js";
 
 export const oauthAccounts = pgTable(
-    "oauth_acccounts",
-    {
-        id: uuid("id").defaultRandom().primaryKey(),
+  "oauth_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
 
-        userId: uuid("user_id")
-            .notNull()
-            .references(()=> users.id,{
-                onDelete: "cascade",
-            }),
-        
-        provider: varchar("provider",{
-            length: 20,
-        }).notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
 
-        providerAccountId: varchar("provider_account_id",{
-            length: 255,
-        }).notNull(),
+    provider: varchar("provider", { length: 20 }).notNull(),
 
-        createdAt: timestamp("created_at",{
-            withTimezone: true,
-        })
-            .defaultNow()
-            .notNull(),
+    providerAccountId: varchar("provider_account_id", { length: 255 }).notNull(),
 
-        updatedAt: timestamp("updated_at",{
-            withTimezone: true,
-        })
-            .defaultNow()
-            .notNull(),
-    },
-    (table) => ({
-        providerAccountUnique: unique().on(
-            table.provider,
-            table.providerAccountId,
-        ),
-    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  table => ({
+    providerAccountUnique: unique().on(table.provider, table.providerAccountId),
+  }),
 );
